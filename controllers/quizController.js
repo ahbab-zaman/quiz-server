@@ -5,7 +5,11 @@ const Tesseract = require("tesseract.js");
 const { getStructuredQuestions } = require("../services/llmService");
 
 async function pdfToImages(pdfPath) {
-  const outputDir = path.dirname(pdfPath);
+  const outputDir = path.resolve(__dirname, "..", "uploads");
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir);
+  }
+
   const outputName = path.basename(pdfPath, path.extname(pdfPath));
 
   const opts = {
@@ -17,7 +21,6 @@ async function pdfToImages(pdfPath) {
 
   await pdfPoppler.convert(pdfPath, opts);
 
-  // Return array of image paths generated from PDF
   const files = fs
     .readdirSync(outputDir)
     .filter((f) => f.startsWith(outputName) && f.endsWith(".png"))
@@ -29,7 +32,7 @@ async function pdfToImages(pdfPath) {
 async function ocrImage(imagePath) {
   const {
     data: { text },
-  } = await Tesseract.recognize(imagePath, "eng"); // No logger to reduce noise
+  } = await Tesseract.recognize(imagePath, "eng");
   return text;
 }
 
@@ -37,46 +40,48 @@ exports.processPDF = async (req, res) => {
   try {
     const filePath = req.file.path;
 
-    // 1. Convert PDF pages to images
     const images = await pdfToImages(filePath);
     if (images.length === 0) {
       return res.status(400).json({ error: "No images extracted from PDF" });
     }
 
-    const host = req.get("host"); // e.g. localhost:3000
-    const protocol = req.protocol; // http or https
+    const host = req.get("host");
+    const protocol = req.protocol;
+    const uploadsDir = path.resolve(__dirname, "..", "uploads");
 
-    const results = [];
+    const ocrResults = await Promise.all(images.map(ocrImage));
+    const finalResult = [];
 
-    for (const imgPath of images) {
-      // 2. OCR text from each image
-      const text = await ocrImage(imgPath);
-      if (!text.trim()) {
-        // Skip pages with no text or handle as needed
-        continue;
-      }
+    for (let i = 0; i < images.length; i++) {
+      const imgPath = images[i];
+      const text = ocrResults[i];
 
-      // 3. Generate questions from this page's text
+      if (!text.trim()) continue;
+
       const questions = await getStructuredQuestions(text);
-
-      // 4. Build image URL
-      const relativePath = imgPath.replace(/\\/g, "/").split("/uploads/").pop();
+      const relativePath = path
+        .relative(uploadsDir, imgPath)
+        .replace(/\\/g, "/");
       const imageUrl = `${protocol}://${host}/uploads/${relativePath}`;
 
-      // 5. Add to results array
-      results.push({
-        image: imageUrl,
-        questions,
-      });
+      // Push each question individually with same image
+      for (let q of questions) {
+        finalResult.push({
+          image: imageUrl,
+          question: q.question,
+          options: q.options,
+          answer: q.answer,
+        });
+      }
     }
 
-    if (results.length === 0) {
+    if (finalResult.length === 0) {
       return res
         .status(400)
         .json({ error: "No text/questions generated from PDF" });
     }
 
-    res.json(results);
+    res.json(finalResult);
   } catch (error) {
     console.error("Error processing PDF:", error);
     res.status(500).json({ error: "Error processing PDF" });
