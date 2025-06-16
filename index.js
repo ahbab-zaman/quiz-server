@@ -1,14 +1,18 @@
+dotenv.config();
 const express = require("express");
 const dotenv = require("dotenv");
 const cors = require("cors");
 const path = require("path");
 const connectDB = require("./config/db");
 
-dotenv.config();
-
 const app = express();
 
-app.use(cors());
+const corsOptions = {
+  origin: "https://digitalize-client.vercel.app",
+  optionsSuccessStatus: 200,
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
